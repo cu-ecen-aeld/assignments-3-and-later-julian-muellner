@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 if [[ $# -ne 2 ]]; then
-    echo "Not accecpt exactly two parameters."
+    echo "Script accepts exactly two parameters."
     exit 1
 fi
 
@@ -14,5 +14,5 @@ if [[ ! -d "$filesdir" ]]; then
 fi
 
 num_lines=$(find "$filesdir" -type f | wc -l)
-matching_lines=$(grep -ir "$searchstr" "$filesdir" | wc -l)
+matching_lines=$(grep -r "$searchstr" "$filesdir" | wc -l)
 echo "The number of files are ${num_lines} and the number of matching lines are ${matching_lines}"
