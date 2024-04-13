@@ -1,5 +1,13 @@
 #include "systemcalls.h"
 
+#include <stdlib.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+
+
 /**
  * @param cmd the command to execute with system()
  * @return true if the command in @param cmd was executed
@@ -9,15 +17,7 @@
 */
 bool do_system(const char *cmd)
 {
-
-/*
- * TODO  add your code here
- *  Call the system() function with the command set in the cmd
- *   and return a boolean true if the system() call completed with success
- *   or false() if it returned a failure
-*/
-
-    return true;
+    return system(cmd) == 0 ? true : false;
 }
 
 /**
@@ -47,7 +47,28 @@ bool do_exec(int count, ...)
     command[count] = NULL;
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
-    command[count] = command[count];
+    // command[count] = command[count];
+    
+    pid_t child_pid = fork();
+    
+    // child branch
+    if(child_pid == 0) {
+        execv(command[0], command);
+        perror("failed to execv");
+        exit(EXIT_FAILURE); //only reached in case of error
+    }
+    
+    //parent branch
+    if(child_pid == -1) {
+        perror("fork failed");
+        return false;
+    }
+    
+    int wstatus = 0;
+    pid_t result = waitpid(child_pid, &wstatus, 0);
+    if(result <= 0 || WEXITSTATUS(wstatus) != 0)
+        return false;
+
 
 /*
  * TODO:
@@ -82,7 +103,40 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     command[count] = NULL;
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
-    command[count] = command[count];
+    // command[count] = command[count];
+
+    int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+    if(fd < 0) {
+        perror("opening file"); 
+        return false;
+    }
+
+    pid_t child_pid = fork();
+
+    // child branch
+    if(child_pid == 0) {
+        if(dup2(fd, 1) < 0) {
+            perror("dup failed");
+            exit(EXIT_FAILURE);
+        }
+        close(fd);
+        execv(command[0], command);
+        perror("execv'ing failed");
+        exit(EXIT_FAILURE); //only reached in case of error
+    }
+
+    close(fd);
+    
+    //parent branch
+    if(child_pid == -1) {
+        return false;
+    }
+    
+    int wstatus = 0;
+    pid_t result = waitpid(child_pid, &wstatus, 0);
+    if(result <= 0 || WEXITSTATUS(wstatus) != 0)
+        return false;
+
 
 
 /*
