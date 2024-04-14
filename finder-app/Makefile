@@ -1,9 +1,3 @@
-ifndef CROSS_COMPILE
-	CROSS_COMPILE :=
-endif
-CC := $(CROSS_COMPILE)gcc
-CFLAGS := -g -Wall -Werror -pedantic -std=c99
-
 all: writer
 
 clean:
@@ -11,10 +5,10 @@ clean:
 	rm -f writer
 
 writer: writer.o
-	$(CC) $(CFLAGS) -o writer writer.o
+	$(CC) $(LDFLAGS) -o writer writer.o
 
 %.o: %.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $<
 
 
 .PHONY: clean all
