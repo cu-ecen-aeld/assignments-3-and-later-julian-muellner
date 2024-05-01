@@ -18,6 +18,8 @@
 
 #include <signal.h>
 
+#include <sys/queue.h>
+
 #define LISTEN_BACKLOG 64
 #define BUFFER_SIZE 64
 #define TMP_PATH "/var/tmp/aesdsocketdata"
@@ -28,10 +30,111 @@ static void signal_handler(int signal_number) {
     shutdown_signal = true;
 }
 
-int main(int argc, char** argv) {
-    unsigned char buffer[BUFFER_SIZE];
+static int setup_server(bool is_daemon) {
     assert(sizeof(unsigned char) == 1);
 
+    openlog(NULL, 0, LOG_USER);
+
+    // setup signal hander
+    struct sigaction sig_act;
+    memset(&sig_act, 0, sizeof(sig_act));
+    sig_act.sa_handler = signal_handler;
+    if(sigaction(SIGTERM, &sig_act, NULL) || sigaction(SIGINT, &sig_act, NULL)) {
+        syslog(LOG_ERR, "Cannot register for signal handlers");
+        exit(-1);
+    }
+
+    // open socket to port 9000; exit with -1 if fails
+    int socket_fd = socket(PF_INET, SOCK_STREAM, 0);
+    if(socket_fd < 0) {
+        syslog(LOG_ERR, "Could not open socket");
+        exit(-1);
+    }
+
+    struct addrinfo hints;
+    struct addrinfo *servinfo;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_flags = AI_PASSIVE;
+    hints.ai_socktype = SOCK_STREAM;
+    
+    if(getaddrinfo(NULL, "9000", &hints, &servinfo)) {
+        exit(-1);
+    }
+
+    int reuseaddr = 1;
+    if(setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr, sizeof(reuseaddr)) == -1) {
+        syslog(LOG_ERR, "Could not set socket option");
+        exit(-1);
+    }
+
+    if(bind(socket_fd, servinfo->ai_addr, servinfo->ai_addrlen)) {
+        syslog(LOG_ERR, "Could not bind:");
+        exit(-1);
+    }
+
+    free(servinfo);
+
+    if(is_daemon) {
+        if(daemon(0,0) == -1) {
+            syslog(LOG_ERR, "Could not fork daemon");
+            fprintf(stderr, "Could not fork daemon");
+            exit(-1);
+        }
+    }
+
+    return socket_fd;
+}
+
+static int ip_to_str(struct sockaddr *addr, char* target){
+    struct sockaddr_in *addr_in = (struct sockaddr_in*) addr;
+    if(inet_ntop(AF_INET, &(addr_in->sin_addr), target, INET_ADDRSTRLEN) == NULL) {
+        syslog(LOG_ERR, "Could not convert ip to string");
+        exit(-1);
+    }
+    return 0;
+}
+
+static void socket_to_file(unsigned char* buffer, size_t buffer_size, FILE* output_file, int server_fd) {
+    ssize_t bytes_received;
+    do {
+        bytes_received = read(server_fd, buffer, buffer_size);
+        if(bytes_received < 0) {
+            syslog(LOG_ERR, "Reading from socket failed: %s", strerror(errno));
+            exit(-1);
+        }
+        ssize_t bytes_written = fwrite(buffer, 1, bytes_received, output_file);
+        if(bytes_written < bytes_received) {
+            syslog(LOG_ERR, "Could not write received bytes to buffer");
+            exit(-1);
+        }
+    } while(memchr(buffer, '\n', bytes_received) == NULL);
+    assert(buffer[bytes_received - 1] == '\n'); // check assumption: last char is \n
+
+    // after packet reception, echo back the whole file data to the sender
+    fflush(output_file);
+}
+
+static void file_to_socket(unsigned char* buffer, size_t buffer_size, FILE* file, int server_fd) {
+    rewind(file);
+    do {
+        ssize_t bytes_remaining = fread(buffer, 1, buffer_size, file);
+        ssize_t total_received = 0;
+        while(bytes_remaining > 0) {
+            ssize_t written = write(server_fd, buffer + total_received, bytes_remaining);
+            if(written == -1) {
+                syslog(LOG_ERR, "Writing of data failed");
+                exit(-1);
+            }
+            total_received += written;
+            bytes_remaining -= written;
+        }
+    } while(feof(file) == 0);
+}
+
+int main(int argc, char** argv) {
+    unsigned char buffer[BUFFER_SIZE];
+    
     if(argc > 2) {
         fprintf(stderr, "Usage: %s [-d]", argv[0]);
         exit(-1);
@@ -47,50 +150,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    openlog(NULL, 0, LOG_USER);
-
-    // setup signal hander
-    struct sigaction sig_act;
-    memset(&sig_act, 0, sizeof(sig_act));
-    sig_act.sa_handler = signal_handler;
-    if(sigaction(SIGTERM, &sig_act, NULL) || sigaction(SIGINT, &sig_act, NULL)) {
-        syslog(LOG_ERR, "Cannot register for signal handlers");
+    int socket_fd = setup_server(is_daemon);
+    if(socket_fd < 0) {
         exit(-1);
-    }
-
-    // open socket to port 9000; exit with -1 if fails
-    int socket_fd = socket(PF_INET, SOCK_STREAM, 0);
-
-    struct addrinfo hints;
-    struct addrinfo *servinfo;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_flags = AI_PASSIVE;
-    hints.ai_socktype = SOCK_STREAM;
-    
-    if(getaddrinfo(NULL, "9000", &hints, &servinfo)) {
-        return -1;
-    }
-
-    int reuseaddr = 1;
-    if(setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr, sizeof(reuseaddr)) == -1) {
-        syslog(LOG_ERR, "Could not set socket option");
-        return -1;
-    }
-
-    if(bind(socket_fd, servinfo->ai_addr, servinfo->ai_addrlen)) {
-        syslog(LOG_ERR, "Could not bind:");
-        return -1;
-    }
-
-    free(servinfo);
-
-    if(is_daemon) {
-        if(daemon(0,0) == -1) {
-            syslog(LOG_ERR, "Could not fork daemon");
-            fprintf(stderr, "Could not fork daemon");
-            exit(-1);
-        }
     }
 
     while(!shutdown_signal) {
@@ -110,49 +172,14 @@ int main(int argc, char** argv) {
 
         // Log accepted: Accepted connection from $IP
         char ipAddrStr[INET_ADDRSTRLEN];
-        struct sockaddr_in *addr_in = (struct sockaddr_in*) &addr;
-
-        if(inet_ntop(AF_INET, &(addr_in->sin_addr), ipAddrStr, INET_ADDRSTRLEN) == NULL) {
-            syslog(LOG_ERR, "Could not convert ip to string");
-            exit(-1);
-        }
-        else
-            syslog(LOG_DEBUG, "Accepted connection from %s", ipAddrStr);
+        ip_to_str(&addr, ipAddrStr);
+        syslog(LOG_DEBUG, "Accepted connection from %s", ipAddrStr);
 
         // recive from connection and append to /var/tmp/aesdsocketdata
         // packet is terminated by '\n', does not contain '\0'
         FILE* output_file = fopen(TMP_PATH, "a+");
-        ssize_t bytes_received;
-        do {
-            bytes_received = read(server_fd, buffer, BUFFER_SIZE);
-            if(bytes_received < 0) {
-                syslog(LOG_ERR, "Reading from socket failed: %s", strerror(errno));
-                return -1;
-            }
-            ssize_t bytes_written = fwrite(buffer, 1, bytes_received, output_file);
-            if(bytes_written < bytes_received) {
-                syslog(LOG_ERR, "Could not write received bytes to buffer");
-                return -1;
-            }
-        } while(memchr(buffer, '\n', bytes_received) == NULL);
-        assert(buffer[bytes_received - 1] == '\n'); // check assumption: last char is \n
-
-        // after packet reception, echo back the whole file data to the sender
-        fflush(output_file);
-        rewind(output_file);
-        do {
-            ssize_t bytes_remaining = fread(buffer, 1, BUFFER_SIZE, output_file);
-            ssize_t total_received = 0;
-            while(bytes_remaining > 0) {
-                ssize_t written = write(server_fd, buffer + total_received, bytes_remaining);
-                if(written == -1) {
-                    syslog(LOG_ERR, "Writing of data failed");
-                    return -1;
-                }
-                total_received += written;
-                bytes_remaining -= written;
-            }
-        } while(feof(output_file) == 0);
+        socket_to_file(buffer, BUFFER_SIZE, output_file, server_fd);
+        file_to_socket(buffer, BUFFER_SIZE, output_file, server_fd);
         fclose(output_file);
 
         // syslog: Closed connection from $IP
@@ -161,8 +188,6 @@ int main(int argc, char** argv) {
     }
     
     close(socket_fd);
-
     unlink(TMP_PATH);
-
     return EXIT_SUCCESS;
 }
