@@ -40,14 +40,13 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
     make -j4 ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} all
     # make -j4 ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} modules
     make -j4 ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} dtbs
-
-    cp arch/arm64/boot/Image "${OUTDIR}/Image"
 fi
 
 echo "Adding the Image in outdir"
+cd "$OUTDIR"
+cp "linux-stable/arch/${ARCH}/boot/Image" "${OUTDIR}/Image"
 
 echo "Creating the staging directory for the root filesystem"
-cd "$OUTDIR"
 if [ -d "${OUTDIR}/rootfs" ]
 then
     echo "Deleting rootfs directory at ${OUTDIR}/rootfs and starting over"
