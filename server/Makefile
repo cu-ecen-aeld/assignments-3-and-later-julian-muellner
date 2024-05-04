@@ -1,10 +1,11 @@
 CROSS_COMPILE ?=
 CC ?= $(CROSS-COMPILE)gcc
 
-CFLAGS += -g -Wall -Werror -pedantic -std=c99 -pthread -lrt
-LDFLAGS += -g -Wall -Werror -pedantic -std=c99 -pthread -lrt
+CFLAGS ?= -g -Wall -Werror -pedantic -std=c99
+LDFLAGS ?= -pthread -lrt
+TARGET ?= aesdsocket
 
-all: aesdsocket
+all: $(TARGET)
 
 clean:
 	rm -rf *.o
@@ -14,6 +15,6 @@ aesdsocket: aesdsocket.o
 	$(CC) -o aesdsocket aesdsocket.o $(LDFLAGS)
 
 %.o: %.c
-	$(CC) $(INCLUDES) -c -o $@ $< $(CFLAGS)
+	$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $<
 
 .PHONY: clean all
