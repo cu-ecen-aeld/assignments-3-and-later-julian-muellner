@@ -27,6 +27,16 @@ MODULE_LICENSE("Dual BSD/GPL");
 
 struct aesd_dev aesd_device;
 
+void debug_print_bytes(const char* prefix, const char* b, size_t size) {
+    char* tmp = kmalloc(size + 1, GFP_KERNEL);
+    if(tmp) {
+        memcpy(tmp, b, size);
+        tmp[size] = '\0';
+        PDEBUG("%s: %s", prefix, tmp);
+        kfree(tmp);
+    }
+}
+
 int aesd_open(struct inode *inode, struct file *filp)
 {
     struct aesd_dev *dev;
@@ -52,8 +62,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 {
     struct aesd_dev *dev;
     struct aesd_buffer_entry *target_entry;
-    struct aesd_buffer_entry *first_entry;
-    size_t entry_offset, remaining_bytes;
+    size_t entry_offset, remaining_bytes, written_bytes;
     ssize_t retval = 0;
 
     PDEBUG("read %zu bytes with offset %lld", count, *f_pos);
@@ -61,36 +70,22 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     dev = filp->private_data;
     while(mutex_lock_interruptible(&dev->aesd_dev_lock)) {}
 
-    first_entry = &dev->buffer.entry[dev->buffer.out_offs];
     target_entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->buffer, *f_pos, &entry_offset);
-
     if(target_entry == NULL) {
         goto write_ret;
     }
 
-    if(target_entry != first_entry) {
-        PDEBUG("ERROR: There seems to be an issue with the write position!");
+    remaining_bytes = target_entry->size - entry_offset;
+    written_bytes = count > remaining_bytes ? remaining_bytes : count;
+
+    if (copy_to_user(buf, target_entry->buffptr + entry_offset, written_bytes)) {
+        retval = -EFAULT;
         goto write_ret;
     }
+    retval = written_bytes;
+    *f_pos += written_bytes;
 
-    remaining_bytes = first_entry->size - entry_offset;
-    if(count > remaining_bytes) { // finish writing this entry
-        if (copy_to_user(buf, first_entry->buffptr + entry_offset, remaining_bytes)) {
-            retval = -EFAULT;
-            goto write_ret;
-        }
-        retval = remaining_bytes;
-        *f_pos = 0;
-        dev->buffer.out_offs = (dev->buffer.out_offs + 1) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
-        dev->buffer.full = false;
-    } else { // just read whatever is there, do not advance pointer
-        if (copy_to_user(buf, first_entry->buffptr + entry_offset, count)) {
-            retval = -EFAULT;
-            goto write_ret;
-        }
-        retval = count;
-        *f_pos = *f_pos + count;
-    }
+    debug_print_bytes("Reading bytes", target_entry->buffptr + entry_offset, count > remaining_bytes ? remaining_bytes : count);
 
 write_ret:
     mutex_unlock(&dev->aesd_dev_lock);
@@ -104,7 +99,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     struct aesd_dev *dev;
     char *tmp;
 
-    PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
+    PDEBUG("write %zu bytes with offset %lld", count, *f_pos);
     
     dev = filp->private_data;
 
@@ -115,10 +110,11 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     if(tmp == NULL) {
         goto read_ret;
     }
-    
+
     memcpy(tmp, dev->tmp_entry.buffptr, dev->tmp_entry.size);
     if(copy_from_user(tmp + dev->tmp_entry.size, buf, count)) {
         retval = -EFAULT;
+        kfree(tmp);
         goto read_ret;
     }
     
@@ -129,6 +125,8 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 
     // free memory
     if(dev->tmp_entry.buffptr[dev->tmp_entry.size - 1] == '\n') {
+        debug_print_bytes("Commiting write string", dev->tmp_entry.buffptr, dev->tmp_entry.size - 1);
+
         kfree(aesd_circular_buffer_add_entry(&dev->buffer, &dev->tmp_entry));
         dev->tmp_entry.buffptr = NULL;
         dev->tmp_entry.size = 0;
@@ -160,8 +158,6 @@ static int aesd_setup_cdev(struct aesd_dev *dev)
     }
     return err;
 }
-
-
 
 int aesd_init_module(void)
 {
@@ -203,8 +199,6 @@ void aesd_cleanup_module(void)
     
     unregister_chrdev_region(devno, 1);
 }
-
-
 
 module_init(aesd_init_module);
 module_exit(aesd_cleanup_module);
