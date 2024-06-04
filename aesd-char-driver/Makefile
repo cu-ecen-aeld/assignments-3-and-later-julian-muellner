@@ -9,6 +9,7 @@ else
   DEBFLAGS = -O2 -std=gnu11
 endif
 
+CONFIG_MODULE_SIG=n
 EXTRA_CFLAGS += $(DEBFLAGS)
 
 ifneq ($(KERNELRELEASE),)
