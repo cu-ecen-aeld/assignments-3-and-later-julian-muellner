@@ -19,6 +19,7 @@
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include "aesdchar.h"
+#include "aesd_ioctl.h"
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -122,6 +123,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     kfree(dev->tmp_entry.buffptr);
     dev->tmp_entry.buffptr = tmp; 
     retval = count;
+    *f_pos = *f_pos + retval;
 
     // free memory
     if(dev->tmp_entry.buffptr[dev->tmp_entry.size - 1] == '\n') {
@@ -137,12 +139,73 @@ read_ret:
     return retval;
 }
 
+loff_t aesd_seek(struct file* filp, loff_t offset, int whence) {
+    ssize_t retval = 0;
+    struct aesd_dev *dev;
+
+    PDEBUG("Seek %lld bytes with whence %d", offset, whence);
+    dev = filp->private_data;
+
+    // acq lock
+    while(mutex_lock_interruptible(&dev->aesd_dev_lock)) {}
+
+    retval = fixed_size_llseek(filp, offset, whence, aesd_buffer_size(&dev->buffer));
+
+    mutex_unlock(&dev->aesd_dev_lock);
+    return retval;
+}
+
+static long aesd_adjust_file_offset(struct file *filp, uint32_t write_cmd, uint32_t write_cmd_offset) {
+    struct aesd_dev *dev;
+    long retval = -EINVAL;
+
+    dev = filp->private_data;
+
+    PDEBUG("IOCTL SEEK %u, %u", write_cmd, write_cmd_offset);
+
+    // acq lock
+    while(mutex_lock_interruptible(&dev->aesd_dev_lock)) {}
+
+    // validate values and get fpos
+    if(aesd_circular_buffer_find_fpos_for_entry_offset(&dev->buffer, write_cmd, write_cmd_offset, &filp->f_pos) != 0) {
+        retval = -EINVAL;
+    } else {
+        retval = 0;
+    }
+
+    mutex_unlock(&dev->aesd_dev_lock);
+    return retval;
+}
+
+long aesd_ioctl(struct file* filp, unsigned int cmd, unsigned long arg) {
+    long retval = -EINVAL;
+    struct aesd_seekto seekto;
+
+    PDEBUG("IOCTL %u with argument %lu", cmd, arg);
+
+    switch(cmd) {
+        case AESDCHAR_IOCSEEKTO:
+            if(copy_from_user(&arg, (const void __user*) arg, sizeof(seekto)) != 0) {
+                retval = -EFAULT;
+            } else {
+                retval = aesd_adjust_file_offset(filp, seekto.write_cmd, seekto.write_cmd_offset);
+            }
+            break;
+
+        default: break;
+    }
+    return retval;
+}
+
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
     .write =    aesd_write,
     .open =     aesd_open,
     .release =  aesd_release,
+    .llseek =   aesd_seek,
+    .unlocked_ioctl = aesd_ioctl,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)
