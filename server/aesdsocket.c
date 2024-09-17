@@ -22,12 +22,15 @@
 #include <pthread.h>
 #include <sys/queue.h>
 
+#include "../aesd-char-driver/aesd_ioctl.h"
+
 #ifndef USE_AESD_CHAR_DEVICE
     #define USE_AESD_CHAR_DEVICE 1
 #endif
 
 #define LISTEN_BACKLOG 64
 #define BUFFER_SIZE 64
+#define IOCTL_PREFIX "AESDCHAR_IOCSEEKTO:"
 
 #if USE_AESD_CHAR_DEVICE == 1
     #define TMP_PATH "/dev/aesdchar"
@@ -193,26 +196,51 @@ static int ip_to_str(struct sockaddr *addr, char* target){
     return 0;
 }
 
-static int socket_to_file(unsigned char* buffer, size_t buffer_size, FILE* output_file, int server_fd) {
+static int socket_to_file(char* buffer, size_t buffer_size, FILE* output_file, int server_fd) {
+    char *result_fgets;
+    int result;
     ssize_t bytes_received;
+    FILE* server_file = fdopen(server_fd, "r");
+
+    bool first = true;
+
     do {
-        bytes_received = read(server_fd, buffer, buffer_size);
-        if(bytes_received < 0) {
+        result_fgets = fgets(buffer, buffer_size, server_file);
+        if(result_fgets == NULL) {
             syslog(LOG_ERR, "Reading from socket failed: %s", strerror(errno));
             return -1;
         }
-        ssize_t bytes_written = fwrite(buffer, 1, bytes_received, output_file);
-        if(bytes_written < bytes_received) {
+
+        #if USE_AESD_CHAR_DEVICE == 1
+        unsigned int x, y;
+        if(first && sscanf(buffer, IOCTL_PREFIX "%u,%u\n", &x, &y) == 2) {
+            struct aesd_seekto seekto;
+            seekto.write_cmd = x;
+            seekto.write_cmd_offset = y;
+            result = ioctl(fileno(output_file), AESDCHAR_IOCSEEKTO, &seekto);
+            if(result < 0) {
+                syslog(LOG_ERR, "IOCTL failed: %d", result);
+                return -1;
+            }
+            return 0;
+        }
+        first = false;
+        #endif
+
+        result = fputs(buffer, output_file);
+        if(result < 0) {
             syslog(LOG_ERR, "Could not write received bytes to buffer");
             return -1;
         }
+        bytes_received = strlen(buffer);
     } while(memchr(buffer, '\n', bytes_received) == NULL);
     assert(buffer[bytes_received - 1] == '\n'); // check assumption: last char is \n
+
+    rewind(output_file);
     return 0;
 }
 
-static int file_to_socket(unsigned char* buffer, size_t buffer_size, FILE* file, int server_fd) {
-    rewind(file);
+static int file_to_socket(char* buffer, size_t buffer_size, FILE* file, int server_fd) {
     do {
         ssize_t bytes_remaining = fread(buffer, 1, buffer_size, file);
         ssize_t total_received = 0;
@@ -231,7 +259,7 @@ static int file_to_socket(unsigned char* buffer, size_t buffer_size, FILE* file,
 
 static int run_thread_handler(struct thread_args *args) {
     char ipAddrStr[INET_ADDRSTRLEN];
-    unsigned char buffer[BUFFER_SIZE];
+    char buffer[BUFFER_SIZE];
 
     if(ip_to_str(&args->addr, ipAddrStr) != 0) {
         return -1;

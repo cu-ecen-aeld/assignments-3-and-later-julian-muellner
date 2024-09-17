@@ -27,8 +27,6 @@ int aesd_circular_buffer_find_fpos_for_entry_offset(struct aesd_circular_buffer 
 
     uint8_t index = buffer->out_offs;
     do {
-        
-
         if(entry_no == buffer_offset) {
             if(buffer->entry[index].size <= entry_offset) {
                 return -1;

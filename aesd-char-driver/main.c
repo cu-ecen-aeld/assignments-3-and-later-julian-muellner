@@ -123,7 +123,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     kfree(dev->tmp_entry.buffptr);
     dev->tmp_entry.buffptr = tmp; 
     retval = count;
-    *f_pos = *f_pos + retval;
+    *f_pos = aesd_buffer_size(&dev->buffer);
 
     // free memory
     if(dev->tmp_entry.buffptr[dev->tmp_entry.size - 1] == '\n') {
@@ -185,14 +185,15 @@ long aesd_ioctl(struct file* filp, unsigned int cmd, unsigned long arg) {
 
     switch(cmd) {
         case AESDCHAR_IOCSEEKTO:
-            if(copy_from_user(&arg, (const void __user*) arg, sizeof(seekto)) != 0) {
+            if(copy_from_user(&seekto, (const void __user*) arg, sizeof(seekto)) != 0) {
+                PDEBUG("IOCTL copy from user failed!");
                 retval = -EFAULT;
             } else {
                 retval = aesd_adjust_file_offset(filp, seekto.write_cmd, seekto.write_cmd_offset);
             }
             break;
 
-        default: break;
+        default: PDEBUG("IOCTL with unknown argument!"); break;
     }
     return retval;
 }
